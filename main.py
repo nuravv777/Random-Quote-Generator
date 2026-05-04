@@ -1,122 +1,145 @@
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import ttk, messagebox
 import random
+import string
 import json
 import os
+from datetime import datetime
 
-# Имя твоего файла истории (Пункт 5)
-HISTORY_FILE = "history.json"
+class PasswordGeneratorApp:
+    MIN_LEN = 4
+    MAX_LEN = 32
 
-class QuoteApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Random Quote Generator")
-        self.root.geometry("600x650")
+        self.root.title("Random Password Generator")
+        self.root.geometry("650x550")
+        self.root.resizable(False, False)
 
-        # 1. Список цитат (Пункт 1)
-        self.quotes = [
-            {"text": "Жизнь — это то, что происходит, пока вы строите планы.", "author": "Джон Леннон", "theme": "Жизнь"},
-            {"text": "Успех — это идти от ошибки к ошибке без потери энтузиазма.", "author": "Уинстон Черчилль", "theme": "Успех"},
-            {"text": "Сделай шаг, и дорога появится сама собой.", "author": "Стив Джобс", "theme": "Мотивация"},
-            {"text": "Сложнее всего начать действовать.", "author": "Амелия Эрхарт", "theme": "Мотивация"},
-            {"text": "Код работает быстрее, чем ты думаешь, если он чист.", "author": "Роберт Мартин", "theme": "IT"}
-        ]
-
-        # Загружаем историю из файла при старте
+        self.history_file = "password_history.json"
         self.history = self.load_history()
 
         self.setup_ui()
 
     def setup_ui(self):
-        """Интерфейс приложения"""
-        # Блок вывода цитаты
-        self.quote_display = tk.Label(self.root, text="Нажмите кнопку для получения цитаты", 
-                                      wraplength=500, font=("Arial", 14, "italic"), pady=30)
-        self.quote_display.pack()
+        # --- Настройки ---
+        settings_frame = ttk.Frame(self.root, padding="10")
+        settings_frame.pack(fill=tk.X)
 
-        self.author_display = tk.Label(self.root, text="", font=("Arial", 12, "bold"), fg="gray")
-        self.author_display.pack()
+        # Ползунок длины
+        ttk.Label(settings_frame, text="Длина пароля:").grid(row=0, column=0, sticky=tk.W, padx=5)
+        self.length_var = tk.IntVar(value=12)
+        self.length_slider = ttk.Scale(settings_frame, from_=self.MIN_LEN, to=self.MAX_LEN,
+                                       variable=self.length_var, orient=tk.HORIZONTAL)
+        self.length_slider.grid(row=0, column=1, padx=5, sticky=tk.EW)
+        self.length_label = ttk.Label(settings_frame, textvariable=self.length_var)
+        self.length_label.grid(row=0, column=2, padx=5)
 
-        # Кнопка генерации (Пункт 2)
-        self.gen_btn = tk.Button(self.root, text="СГЕНЕРИРОВАТЬ ЦИТАТУ", command=self.generate_quote,
-                                 bg="#2196F3", fg="white", font=("Arial", 10, "bold"), padx=20, pady=10)
-        self.gen_btn.pack(pady=20)
+        # Чекбоксы
+        self.use_digits = tk.BooleanVar(value=True)
+        self.use_letters = tk.BooleanVar(value=True)
+        self.use_special = tk.BooleanVar(value=True)
 
-        # Блок фильтрации (Пункт 4)
-        filter_frame = tk.LabelFrame(self.root, text=" Фильтры поиска ", padx=10, pady=10)
-        filter_frame.pack(fill="x", padx=20, pady=10)
+        ttk.Checkbutton(settings_frame, text="Цифры (0-9)", variable=self.use_digits).grid(row=1, column=0, sticky=tk.W, pady=5)
+        ttk.Checkbutton(settings_frame, text="Буквы (A-Z, a-z)", variable=self.use_letters).grid(row=1, column=1, sticky=tk.W, pady=5)
+        ttk.Checkbutton(settings_frame, text="Спецсимволы (!@#$%)", variable=self.use_special).grid(row=1, column=2, sticky=tk.W, pady=5)
 
-        tk.Label(filter_frame, text="Автор:").grid(row=0, column=0, sticky="w")
-        self.auth_entry = tk.Entry(filter_frame)
-        self.auth_entry.grid(row=0, column=1, padx=5, pady=5)
+        # Кнопка генерации
+        self.gen_btn = ttk.Button(settings_frame, text="Сгенерировать", command=self.generate_password)
+        self.gen_btn.grid(row=2, column=0, columnspan=3, pady=10, sticky=tk.EW)
 
-        tk.Label(filter_frame, text="Тема:").grid(row=0, column=2, sticky="w")
-        self.theme_entry = tk.Entry(filter_frame)
-        self.theme_entry.grid(row=0, column=3, padx=5, pady=5)
+        # Поле результата
+        self.result_var = tk.StringVar()
+        self.result_entry = ttk.Entry(self.root, textvariable=self.result_var, font=("Courier", 14), justify=tk.CENTER)
+        self.result_entry.pack(fill=tk.X, padx=15, pady=5)
+        self.result_entry.config(state="readonly")
 
-        # Блок истории (Пункт 3)
-        tk.Label(self.root, text="История просмотров:").pack()
-        self.history_list = tk.Listbox(self.root, width=70, height=10)
-        self.history_list.pack(padx=20, pady=10)
-        
-        self.update_history_ui()
+        # Копирование
+        self.copy_btn = ttk.Button(self.root, text="📋 Копировать в буфер", command=self.copy_to_clipboard)
+        self.copy_btn.pack(pady=5)
 
-    def generate_quote(self):
-        """Выбор цитаты с учетом фильтров и сохранение"""
-        auth_f = self.auth_entry.get().strip().lower()
-        theme_f = self.theme_entry.get().strip().lower()
+        # --- Таблица истории ---
+        history_frame = ttk.LabelFrame(self.root, text="История генераций", padding="5")
+        history_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        # Фильтрация
-        filtered = [
-            q for q in self.quotes 
-            if (not auth_f or auth_f in q['author'].lower()) and 
-               (not theme_f or theme_f in q['theme'].lower())
-        ]
+        cols = ("time", "length", "password")
+        self.tree = ttk.Treeview(history_frame, columns=cols, show="headings")
+        self.tree.heading("time", text="Время")
+        self.tree.heading("length", text="Длина")
+        self.tree.heading("password", text="Пароль")
+        self.tree.column("time", width=140)
+        self.tree.column("length", width=50, anchor=tk.CENTER)
+        self.tree.column("password", width=250)
 
-        if not filtered:
-            messagebox.showwarning("Ничего не найдено", "Цитат с такими параметрами нет.")
+        scrollbar = ttk.Scrollbar(history_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        self.tree.configure(yscroll=scrollbar.set)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.update_history_table()
+
+    def generate_password(self):
+        length = self.length_var.get()
+
+        # Валидация длины
+        if length < self.MIN_LEN or length > self.MAX_LEN:
+            messagebox.showwarning("Ошибка ввода", f"Длина пароля должна быть от {self.MIN_LEN} до {self.MAX_LEN}!")
             return
 
-        selected = random.choice(filtered)
+        # Формирование пула символов
+        chars = ""
+        if self.use_digits.get(): chars += string.digits
+        if self.use_letters.get(): chars += string.ascii_letters
+        if self.use_special.get(): chars += string.punctuation
 
-        # Показываем на экране
-        self.quote_display.config(text=f"«{selected['text']}»")
-        self.author_display.config(text=f"— {selected['author']} ({selected['theme']})")
+        if not chars:
+            messagebox.showwarning("Ошибка", "Выберите хотя бы один тип символов!")
+            return
 
-        # Добавляем в историю (в начало списка)
-        self.history.insert(0, selected)
-        
-        # Ограничим историю 50 записями, чтобы файл не рос бесконечно
-        self.history = self.history[:50]
-        
-        self.save_history() # Пункт 5
-        self.update_history_ui()
+        # Генерация через random
+        password = ''.join(random.choice(chars) for _ in range(length))
+        self.result_var.set(password)
+        self.result_entry.config(state="normal")
+        self.result_entry.delete(0, tk.END)
+        self.result_entry.insert(0, password)
+        self.result_entry.config(state="readonly")
 
-    def update_history_ui(self):
-        """Обновление списка на экране"""
-        self.history_list.delete(0, tk.END)
-        for item in self.history:
-            self.history_list.insert(tk.END, f" {item['author']}: {item['text'][:40]}...")
-
-    def save_history(self):
-        """Сохранение в JSON (Пункт 5)"""
-        try:
-            with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-                json.dump(self.history, f, ensure_ascii=False, indent=4)
-        except Exception as e:
-            print(f"Ошибка при сохранении: {e}")
+        # Сохранение в историю
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        entry = {"time": timestamp, "length": length, "password": password}
+        self.history.append(entry)
+        self.save_history()
+        self.update_history_table()
 
     def load_history(self):
-        """Загрузка из JSON (Пункт 5)"""
-        if os.path.exists(HISTORY_FILE):
+        if os.path.exists(self.history_file):
             try:
-                with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                with open(self.history_file, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except:
-                return [] # Если файл поврежден, возвращаем пустой список
+            except (json.JSONDecodeError, Exception):
+                return []
         return []
+
+    def save_history(self):
+        with open(self.history_file, "w", encoding="utf-8") as f:
+            json.dump(self.history, f, ensure_ascii=False, indent=2)
+
+    def update_history_table(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        # Новые записи сверху
+        for entry in reversed(self.history):
+            self.tree.insert("", tk.END, values=(entry["time"], entry["length"], entry["password"]))
+
+    def copy_to_clipboard(self):
+        pwd = self.result_var.get()
+        if pwd:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(pwd)
+            self.root.update()
+            messagebox.showinfo("Успех", "Пароль скопирован в буфер обмена!")
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = QuoteApp(root)
+    app = PasswordGeneratorApp(root)
     root.mainloop()
